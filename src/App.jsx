@@ -237,7 +237,7 @@ function App() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h3 className="text-sm font-semibold text-blue-900 mb-2">📊 Data Accuracy</h3>
                 <p className="text-sm text-blue-800 leading-relaxed">
-                  This dashboard queries the same GraphQL and REST APIs that power your Cloudflare dashboard. While this data provides a good indication of general usage, some metrics rely on adaptive sampling. Some metrics on the dashboard include a Confidence Level, based on a 95% confidence interval from Cloudflare's adaptive sampling. For billing purposes, always rely on official Cloudflare data and invoices.
+                  This dashboard queries the same GraphQL and REST APIs that power your Cloudflare dashboard. While this data provides a good indication of general usage, most metrics rely on adaptive sampling. For billing purposes, always rely on official Cloudflare data and invoices.
                 </p>
               </div>
             </div>
