@@ -3,6 +3,12 @@
  * Handles API requests and serves static React assets
  */
 
+const CORE_MONTHLY_STATS_PREFIX = 'monthly-stats-v2';
+const HISTORICAL_DATA_CACHE_PREFIX = 'historical-data-v2';
+const PREWARMED_CACHE_PREFIX = 'pre-warmed-v2';
+const BOT_MONTHLY_STATS_PREFIX = 'monthly-bot-stats-v2';
+const HISTORICAL_BOT_DATA_CACHE_PREFIX = 'historical-bot-data-v2';
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -209,7 +215,7 @@ async function getMetricsProgressive(request, env, corsHeaders) {
 
   try {
     // Check if we have fully cached data (from cron pre-warming)
-    const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+    const cacheKey = `${PREWARMED_CACHE_PREFIX}:${accountIds.join(',')}`;
     const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
     
     if (cachedData && cachedData.data) {
@@ -641,7 +647,7 @@ async function getCacheStatus(request, env, corsHeaders) {
   const body = await request.json();
   const accountIds = parseAccountIds(body);
   
-  const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+  const cacheKey = `${PREWARMED_CACHE_PREFIX}:${accountIds.join(',')}`;
   const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
   
   const status = {
@@ -769,12 +775,18 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
   
   // Check if we have cached previous month data
   const previousMonthKey = `${previousMonthStart.getFullYear()}-${String(previousMonthStart.getMonth() + 1).padStart(2, '0')}`;
-  const cachedPreviousMonth = await env.CONFIG_KV.get(`monthly-stats:${accountId}:${previousMonthKey}`, 'json');
+  const cachedPreviousMonth = await env.CONFIG_KV.get(`${CORE_MONTHLY_STATS_PREFIX}:${accountId}:${previousMonthKey}`, 'json');
 
   // Build GraphQL query for current month (Enterprise zones only)
-  // Use datetime format for httpRequestsAdaptiveGroups with eyeball filter
+  // Use datetime format for httpRequestsAdaptiveGroups with billing-aligned traffic filter
   const currentMonthDatetimeStart = currentMonthStart.toISOString();
   const currentMonthDatetimeEnd = currentMonthEnd.toISOString();
+  const billingAlignedHttpSourceFilter = {
+    OR: [
+      { requestSource: 'eyeball' },
+      { isCrossZoneSubrequest: 1 }
+    ]
+  };
   
   // Query for clean/billable requests only (excludes blocked traffic)
   const currentMonthQuery = {
@@ -785,7 +797,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
         AND: [
           { datetime_geq: currentMonthDatetimeStart },
           { datetime_leq: currentMonthDatetimeEnd },
-          { requestSource: 'eyeball' },
+          billingAlignedHttpSourceFilter,
           { securitySource_neq: 'l7ddos' },
           { securityAction_neq: 'block' },
           { securityAction_neq: 'challenge_failed' },
@@ -825,7 +837,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     }`,
   };
 
-  // Separate query for TOTAL eyeball HTTP traffic (includes blocked + clean)
+  // Separate query for TOTAL HTTP traffic (includes blocked + clean)
   const totalTrafficQuery = {
     operationName: 'GetEnterpriseZoneTotalTraffic',
     variables: {
@@ -834,7 +846,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
         AND: [
           { datetime_geq: currentMonthDatetimeStart },
           { datetime_leq: currentMonthDatetimeEnd },
-          { requestSource: 'eyeball' }
+          billingAlignedHttpSourceFilter
         ]
       }
     },
@@ -966,7 +978,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
     const zoneRequests = totals?.count || 0;
     const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
 
-    // Look up TOTAL eyeball traffic for this zone.
+    // Look up TOTAL HTTP traffic for this zone.
     // If totalTrafficByZone is missing (e.g. vanity query failed),
     // we leave total/blocked null rather than fabricating from billable.
     const totalTraffic = totalTrafficByZone[zone.zoneTag];
@@ -1190,7 +1202,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
           AND: [
             { datetime_geq: previousMonthDatetimeStart },
             { datetime_leq: previousMonthDatetimeEnd },
-            { requestSource: 'eyeball' },
+            billingAlignedHttpSourceFilter,
             { securitySource_neq: 'l7ddos' },
             { securityAction_neq: 'block' },
             { securityAction_neq: 'challenge_failed' },
@@ -1214,7 +1226,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       }`,
     };
 
-    // TOTAL eyeball HTTP traffic for previous month (includes blocked + clean)
+    // TOTAL HTTP traffic for previous month (includes blocked + clean)
     const previousMonthTotalTrafficQuery = {
       operationName: 'GetPreviousMonthTotalTraffic',
       variables: {
@@ -1223,7 +1235,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
           AND: [
             { datetime_geq: previousMonthDatetimeStart },
             { datetime_leq: previousMonthDatetimeEnd },
-            { requestSource: 'eyeball' }
+            billingAlignedHttpSourceFilter
           ]
         }
       },
@@ -1292,7 +1304,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       const zoneRequests = totals?.count || 0;
       const zoneBytes = totals?.sum?.edgeResponseBytes || 0;
 
-      // Look up TOTAL eyeball traffic for this zone
+      // Look up TOTAL HTTP traffic for this zone
       const totalTraffic = prevTotalTrafficByZone[zone.zoneTag];
       const hasTotalTraffic = totalTraffic && typeof totalTraffic.totalRequests === 'number' && typeof totalTraffic.totalBytes === 'number';
       const zoneTotalRequests = hasTotalTraffic ? totalTraffic.totalRequests : null;
@@ -1388,7 +1400,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
 
     // Cache the previous month data since it's now complete
     await env.CONFIG_KV.put(
-      `monthly-stats:${accountId}:${previousMonthKey}`,
+      `${CORE_MONTHLY_STATS_PREFIX}:${accountId}:${previousMonthKey}`,
       JSON.stringify(previousMonthStats),
       { expirationTtl: 31536000 } // 1 year
     );
@@ -1466,7 +1478,7 @@ async function fetchAccountMetrics(apiKey, accountId, env) {
       
       // Update the cache with DNS query data
       await env.CONFIG_KV.put(
-        `monthly-stats:${accountId}:${previousMonthKey}`,
+        `${CORE_MONTHLY_STATS_PREFIX}:${accountId}:${previousMonthKey}`,
         JSON.stringify(previousMonthStats),
         { expirationTtl: 31536000 } // 1 year
       );
@@ -2183,13 +2195,20 @@ async function fetchEnterpriseZones(apiKey, accountId) {
  * Returns Likely Human requests (likely human traffic with bot score > 30)
  */
 async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
+  const billingAlignedHttpSourceFilter = {
+    OR: [
+      { requestSource: 'eyeball' },
+      { isCrossZoneSubrequest: 1 }
+    ]
+  };
+
   const query = {
     operationName: 'GetBotTimeseries',
     variables: {
       zoneTag: zoneId,
       automatedFilter: {
         AND: [
-          { requestSource: 'eyeball' },
+          billingAlignedHttpSourceFilter,
           { botScore: 1 },
           { datetime_geq: dateStart },
           { datetime_leq: dateEnd },
@@ -2199,7 +2218,7 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
       },
       likelyAutomatedFilter: {
         AND: [
-          { requestSource: 'eyeball' },
+          billingAlignedHttpSourceFilter,
           { botScore_geq: 2, botScore_leq: 29 },
           { datetime_geq: dateStart },
           { datetime_leq: dateEnd },
@@ -2208,7 +2227,7 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
       },
       likelyHumanFilter: {
         AND: [
-          { requestSource: 'eyeball' },
+          billingAlignedHttpSourceFilter,
           { botScore_geq: 30, botScore_leq: 99 },
           { datetime_geq: dateStart },
           { datetime_leq: dateEnd },
@@ -2222,7 +2241,7 @@ async function fetchBotManagementMetrics(apiKey, zoneId, dateStart, dateEnd) {
       },
       verifiedBotFilter: {
         AND: [
-          { requestSource: 'eyeball' },
+          billingAlignedHttpSourceFilter,
           { datetime_geq: dateStart },
           { datetime_leq: dateEnd },
           { botManagementDecision_neq: 'other' },
@@ -2472,7 +2491,7 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
   if (now.getDate() >= 2) {
     try {
       await env.CONFIG_KV.put(
-        `monthly-bot-stats:${accountId}:${previousMonthKey}`,
+        `${BOT_MONTHLY_STATS_PREFIX}:${accountId}:${previousMonthKey}`,
         JSON.stringify({
           likelyHuman: previousTotal,
           zones: previousZoneBreakdown,
@@ -2540,7 +2559,7 @@ async function fetchBotManagementForAccount(apiKey, accountId, botManagementConf
  */
 async function getHistoricalBotManagementData(env, accountId) {
   // Check cache first (6 hour TTL)
-  const cacheKey = `historical-bot-data:${accountId}`;
+  const cacheKey = `${HISTORICAL_BOT_DATA_CACHE_PREFIX}:${accountId}`;
   const cached = await env.CONFIG_KV.get(cacheKey, 'json');
   
   if (cached && cached.cachedAt) {
@@ -2553,13 +2572,13 @@ async function getHistoricalBotManagementData(env, accountId) {
   
   const historicalData = [];
   
-  // List all monthly-bot-stats keys for this account
-  const listResult = await env.CONFIG_KV.list({ prefix: `monthly-bot-stats:${accountId}:` });
+  // List all Bot Management monthly stats keys for this account
+  const listResult = await env.CONFIG_KV.list({ prefix: `${BOT_MONTHLY_STATS_PREFIX}:${accountId}:` });
   
   for (const key of listResult.keys) {
     const data = await env.CONFIG_KV.get(key.name, 'json');
     if (data) {
-      // Extract month from key: monthly-bot-stats:{accountId}:YYYY-MM
+      // Extract month from key: {prefix}:{accountId}:YYYY-MM
       const month = key.name.split(':')[2];
       const [year, monthNum] = month.split('-');
       const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
@@ -6544,7 +6563,7 @@ async function getHistoricalAddonData(env, accountId, addonType) {
  */
 async function getHistoricalMonthlyData(env, accountId) {
   // Check cache first (6 hour TTL)
-  const cacheKey = `historical-data:${accountId}`;
+  const cacheKey = `${HISTORICAL_DATA_CACHE_PREFIX}:${accountId}`;
   const cached = await env.CONFIG_KV.get(cacheKey, 'json');
   
   if (cached && cached.cachedAt) {
@@ -6557,13 +6576,13 @@ async function getHistoricalMonthlyData(env, accountId) {
   
   const historicalData = [];
   
-  // List all monthly-stats keys for this account
-  const listResult = await env.CONFIG_KV.list({ prefix: `monthly-stats:${accountId}:` });
+  // List all core monthly stats keys for this account
+  const listResult = await env.CONFIG_KV.list({ prefix: `${CORE_MONTHLY_STATS_PREFIX}:${accountId}:` });
   
   for (const key of listResult.keys) {
     const data = await env.CONFIG_KV.get(key.name, 'json');
     if (data) {
-      // Extract month from key: monthly-stats:{accountId}:YYYY-MM
+      // Extract month from key: {prefix}:{accountId}:YYYY-MM
       const month = key.name.split(':')[2];
       const [year, monthNum] = month.split('-');
       const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
@@ -6822,7 +6841,7 @@ async function preWarmCache(env) {
     const startTime = Date.now();
     console.log(`Pre-warm: Fetching data for ${accountIds.length} account(s)...`);
     const prewarmData = await fetchAllMetrics(apiKey, accountIds, config, env);
-    const prewarmCacheKey = `pre-warmed:${accountIds.join(',')}`;
+    const prewarmCacheKey = `${PREWARMED_CACHE_PREFIX}:${accountIds.join(',')}`;
     await env.CONFIG_KV.put(prewarmCacheKey, JSON.stringify({ timestamp: Date.now(), data: prewarmData }), { expirationTtl: 6 * 60 * 60 });
     const prewarmDuration = Date.now() - startTime;
     console.log(`✅ Pre-warm complete! Cached in ${(prewarmDuration / 1000).toFixed(1)}s. Next dashboard load will be INSTANT! ⚡`);
@@ -6869,7 +6888,7 @@ async function runScheduledThresholdCheck(env) {
 
     console.log(`Scheduled check: Running for ${accountIds.length} account(s)`);
 
-    const cacheKey = `pre-warmed:${accountIds.join(',')}`;
+    const cacheKey = `${PREWARMED_CACHE_PREFIX}:${accountIds.join(',')}`;
     const cachedData = await env.CONFIG_KV.get(cacheKey, 'json');
 
     if (!cachedData || !cachedData.data) {
