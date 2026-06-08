@@ -2597,7 +2597,7 @@ async function getHistoricalBotManagementData(env, accountId) {
     }
   }
 
-  // Convert map to sorted array
+  // Convert map to array and sort by month chronologically
   for (const [month, data] of monthDataMap) {
     const [year, monthNum] = month.split('-');
     const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
@@ -2607,7 +2607,10 @@ async function getHistoricalBotManagementData(env, accountId) {
       likelyHuman: data.likelyHuman,
     });
   }
-  
+
+  // Sort by timestamp (oldest first)
+  historicalData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
   // Cache the historical data (6 hour TTL)
   try {
     await env.CONFIG_KV.put(
@@ -6628,7 +6631,7 @@ async function getHistoricalMonthlyData(env, accountId) {
     }
   }
 
-  // Convert map to sorted array
+  // Convert map to array and sort by month chronologically
   for (const [month, data] of monthDataMap) {
     const [year, monthNum] = month.split('-');
     const timestamp = new Date(parseInt(year), parseInt(monthNum) - 1, 1).toISOString();
@@ -6640,7 +6643,10 @@ async function getHistoricalMonthlyData(env, accountId) {
       dnsQueries: data.dnsQueries,
     });
   }
-  
+
+  // Sort by timestamp (oldest first)
+  historicalData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
   // Cache the historical data (6 hour TTL)
   try {
     await env.CONFIG_KV.put(
